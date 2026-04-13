@@ -209,7 +209,7 @@ class EpayEpic extends PaymentModule
                     'type' => 'text',
                     'label' => $this->l('Webhook autorisation'),
                     'name' => 'EPAY_EPIC_WEBHOOK_AUTORISATION',
-                    'required' => true,
+                    'required' => false,
                 ),
                 array(
                     'type' => 'select',
@@ -482,9 +482,16 @@ class EpayEpic extends PaymentModule
         $amount = $cart->getOrderTotal(true, Cart::BOTH);
         $minorAmount = EpicHelper::toMinorUnits($amount, $currency->iso_code);
 
+
         if(Configuration::get('EPAY_EPIC_MINIMUMUSERAGE') > 0 && (Configuration::get('EPAY_EPIC_AGEVERIFICATIONMODE') == 1 || (Configuration::get('EPAY_EPIC_AGEVERIFICATIONMODE') == 2 && $this->getShippingCountryIso() == "DK")))
         {
             $ageVerificationMinimumAge = intval(Configuration::get('EPAY_EPIC_MINIMUMUSERAGE'));
+        }
+
+        if ($this->context->customer->isLogged()) {
+            $customerId = (string)$cart->id_customer;
+        } else {
+            $customerId = null;
         }
 
         $payload = array(
@@ -495,6 +502,7 @@ class EpayEpic extends PaymentModule
             'successUrl' => preg_replace('/__transactionId__/', '${transaction.id}', $this->context->link->getModuleLink($this->name, 'accept', array('ref' => $reference, 'transactionId' => '__transactionId__'), true)),
             'failureUrl' => $this->context->link->getModuleLink($this->name, 'failure', array('ref' => $reference), true),
             'notificationUrl' => $this->context->link->getModuleLink($this->name, 'callback', array('ref' => $reference), true),
+            'customerId' => $customerId,
             'customer' => EpicHelper::buildCustomerPayload($customer, $invoiceAddress, $deliveryAddress),
             'attributes' => array(
                 'cart_id' => (string)$cart->id,
