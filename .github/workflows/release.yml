@@ -18,7 +18,7 @@ jobs:
       - name: Package module
         run: |
           mkdir -p dist
-          zip -r "dist/epayepic-${GITHUB_REF_NAME}.zip" epayepic -x '*/.DS_Store'
+          zip -r "dist/epayepic-${GITHUB_REF_NAME}.zip" epayepic README.md -x '*/.DS_Store'
 
       - name: Create or update GitHub release
         env:
