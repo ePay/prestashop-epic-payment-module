@@ -9,7 +9,7 @@ require_once __DIR__ . '/lib/EpicApiClient.php';
 
 class EpayEpic extends PaymentModule
 {
-    const MODULE_VERSION = '1.0.1';
+    const MODULE_VERSION = '1.0.2';
     const TABLE_PAYMENTS = 'epayepic_payments';
 
     public function __construct()
@@ -59,6 +59,7 @@ class EpayEpic extends PaymentModule
         }
 
         Configuration::updateValue('EPAY_EPIC_PAYMENT_TITLE', 'ePay (Epic)');
+        Configuration::updateValue('EPAY_EPIC_FEE_PRODUCT_ID', 0);
         Configuration::updateValue('EPAY_EPIC_DEBUG', 0);
         Configuration::updateValue('EPAY_EPIC_SUCCESS_STATE', (int)Configuration::get('PS_OS_PAYMENT'));
 
@@ -74,6 +75,7 @@ class EpayEpic extends PaymentModule
         Configuration::deleteByName('EPAY_EPIC_AGEVERIFICATIONMODE');
         Configuration::deleteByName('EPAY_EPIC_MINIMUMUSERAGE');
         Configuration::deleteByName('EPAY_EPIC_PAYMENT_TITLE');
+        Configuration::deleteByName('EPAY_EPIC_FEE_PRODUCT_ID');
         Configuration::deleteByName('EPAY_EPIC_DEBUG');
         Configuration::deleteByName('EPAY_EPIC_SUCCESS_STATE');
 
@@ -195,6 +197,13 @@ class EpayEpic extends PaymentModule
                 ),
                 array(
                     'type' => 'text',
+                    'label' => $this->l('Payment fee product ID'),
+                    'name' => 'EPAY_EPIC_FEE_PRODUCT_ID',
+                    'desc' => $this->l('Optional hidden virtual product used to add the payment fee to completed orders.'),
+                    'required' => false,
+                ),
+                array(
+                    'type' => 'text',
                     'label' => $this->l('API key'),
                     'name' => 'EPAY_EPIC_API_KEY',
                     'required' => true,
@@ -286,6 +295,7 @@ class EpayEpic extends PaymentModule
             'EPAY_EPIC_AGEVERIFICATIONMODE' => Tools::getValue('EPAY_EPIC_AGEVERIFICATIONMODE', Configuration::get('EPAY_EPIC_AGEVERIFICATIONMODE')),
             'EPAY_EPIC_MINIMUMUSERAGE' => Tools::getValue('EPAY_EPIC_MINIMUMUSERAGE', Configuration::get('EPAY_EPIC_MINIMUMUSERAGE')),
             'EPAY_EPIC_PAYMENT_TITLE'    => Tools::getValue('EPAY_EPIC_PAYMENT_TITLE', Configuration::get('EPAY_EPIC_PAYMENT_TITLE')),
+            'EPAY_EPIC_FEE_PRODUCT_ID'   => (int) Tools::getValue('EPAY_EPIC_FEE_PRODUCT_ID', (int) Configuration::get('EPAY_EPIC_FEE_PRODUCT_ID')),
             'EPAY_EPIC_DEBUG'            => (int) Tools::getValue('EPAY_EPIC_DEBUG', (int) Configuration::get('EPAY_EPIC_DEBUG')),
             'EPAY_EPIC_SUCCESS_STATE'    => (int) Tools::getValue('EPAY_EPIC_SUCCESS_STATE', (int) Configuration::get('EPAY_EPIC_SUCCESS_STATE')),
         );
@@ -301,6 +311,7 @@ class EpayEpic extends PaymentModule
         Configuration::updateValue('EPAY_EPIC_AGEVERIFICATIONMODE', Tools::getValue('EPAY_EPIC_AGEVERIFICATIONMODE'));
         Configuration::updateValue('EPAY_EPIC_MINIMUMUSERAGE', Tools::getValue('EPAY_EPIC_MINIMUMUSERAGE'));
         Configuration::updateValue('EPAY_EPIC_PAYMENT_TITLE', Tools::getValue('EPAY_EPIC_PAYMENT_TITLE'));
+        Configuration::updateValue('EPAY_EPIC_FEE_PRODUCT_ID', (int)Tools::getValue('EPAY_EPIC_FEE_PRODUCT_ID'));
         Configuration::updateValue('EPAY_EPIC_DEBUG', (int)Tools::getValue('EPAY_EPIC_DEBUG'));
         Configuration::updateValue('EPAY_EPIC_SUCCESS_STATE', (int)Tools::getValue('EPAY_EPIC_SUCCESS_STATE'));
     }
@@ -468,6 +479,77 @@ class EpayEpic extends PaymentModule
         return false;
     }
 
+    private function addPaymentFeeProduct(Cart $cart, $feeIncludingTax)
+    {
+        $feeProductId = (int) Configuration::get('EPAY_EPIC_FEE_PRODUCT_ID');
+        if ($feeProductId <= 0 || $feeIncludingTax <= 0) {
+            return false;
+        }
+
+        $product = new Product($feeProductId, false, (int) $cart->id_lang, (int) $cart->id_shop);
+        if (!Validate::isLoadedObject($product)) {
+            throw new Exception('The configured payment fee product could not be loaded.');
+        }
+
+        $this->removePaymentFeeProduct($cart, $feeProductId);
+
+        $specificPrice = new SpecificPrice();
+        $specificPrice->id_shop = (int) $cart->id_shop;
+        $specificPrice->id_shop_group = 0;
+        $specificPrice->id_currency = (int) $cart->id_currency;
+        $specificPrice->id_country = 0;
+        $specificPrice->id_group = 0;
+        $specificPrice->id_customer = 0;
+        $specificPrice->id_product = $feeProductId;
+        $specificPrice->id_product_attribute = 0;
+        $specificPrice->id_cart = (int) $cart->id;
+        $specificPrice->price = $this->getTaxExcludedFeeAmount($cart, $product, $feeIncludingTax);
+        $specificPrice->from_quantity = 1;
+        $specificPrice->reduction = 0;
+        $specificPrice->reduction_type = 'amount';
+        $specificPrice->from = '0000-00-00 00:00:00';
+        $specificPrice->to = '0000-00-00 00:00:00';
+
+        if (!$specificPrice->add()) {
+            throw new Exception('Unable to set the payment fee price for the cart.');
+        }
+
+        if (!$cart->updateQty(1, $feeProductId, 0, false, 'up', (int) $cart->id_address_delivery)) {
+            $specificPrice->delete();
+            throw new Exception('Unable to add the payment fee product to the cart.');
+        }
+
+        return true;
+    }
+
+    private function removePaymentFeeProduct(Cart $cart, $feeProductId)
+    {
+        $cart->deleteProduct((int) $feeProductId, 0, 0, (int) $cart->id_address_delivery);
+
+        Db::getInstance()->delete(
+            'specific_price',
+            'id_cart = ' . (int) $cart->id . ' AND id_product = ' . (int) $feeProductId
+        );
+
+        if (is_callable(array('SpecificPrice', 'flushCache'))) {
+            SpecificPrice::flushCache();
+        }
+    }
+
+    private function getTaxExcludedFeeAmount(Cart $cart, Product $product, $feeIncludingTax)
+    {
+        $addressId = (int) $cart->id_address_delivery;
+        if (!$addressId) {
+            $addressId = (int) $cart->id_address_invoice;
+        }
+
+        $address = new Address($addressId);
+        $taxManager = TaxManagerFactory::getManager($address, (int) $product->id_tax_rules_group);
+        $taxRate = (float) $taxManager->getTaxCalculator()->getTotalRate();
+
+        return Tools::ps_round((float) $feeIncludingTax / (1 + ($taxRate / 100)), 6);
+    }
+
     public function createPaymentSession(Cart $cart)
     {
         $currency = new Currency((int)$cart->id_currency);
@@ -632,9 +714,13 @@ class EpayEpic extends PaymentModule
 
         if (!$orderId) {
 
+            $transactionFee = isset($transaction['fee']) ? (int) $transaction['fee'] : 0;
             $chargedTotal = EpicHelper::fromMinorUnits($transaction['amount'], $payment['currency']);
-            $orderTotalAmount = EpicHelper::fromMinorUnits($transaction['amount'] - $transaction['fee'], $payment['currency']);
-            $orderFee = EpicHelper::fromMinorUnits($transaction['fee'], $payment['currency']);
+            $orderFee = EpicHelper::fromMinorUnits($transactionFee, $payment['currency']);
+            $feeAddedToCart = $this->addPaymentFeeProduct($cart, $orderFee);
+            $orderTotalAmount = $feeAddedToCart
+                ? $cart->getOrderTotal(true, Cart::BOTH)
+                : EpicHelper::fromMinorUnits($transaction['amount'] - $transactionFee, $payment['currency']);
 
             $paymentState = (int)Configuration::get('EPAY_EPIC_SUCCESS_STATE');
 

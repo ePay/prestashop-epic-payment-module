@@ -2,7 +2,7 @@
 <module>
     <name>epayepic</name>
     <displayName><![CDATA[ePay Epic Payments]]></displayName>
-    <version><![CDATA[1.0.1]]></version>
+    <version><![CDATA[1.0.2]]></version>
     <description><![CDATA[Accept payments through the new ePay Epic platform.]]></description>
     <author><![CDATA[ePay Payment Solutions]]></author>
     <tab><![CDATA[payments_gateways]]></tab>
