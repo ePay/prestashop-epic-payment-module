@@ -9,7 +9,7 @@ require_once __DIR__ . '/lib/EpicApiClient.php';
 
 class EpayEpic extends PaymentModule
 {
-    const MODULE_VERSION = '1.0.2';
+    const MODULE_VERSION = '1.0.3';
     const TABLE_PAYMENTS = 'epayepic_payments';
 
     public function __construct()
